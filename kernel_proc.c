@@ -44,6 +44,11 @@ static inline void initialize_PCB(PCB* pcb)
   rlnode_init(& pcb->children_node, pcb);
   rlnode_init(& pcb->exited_node, pcb);
   pcb->child_exit = COND_INIT;
+
+/* new */
+   rlnode_init(&pcb->ptcb_list, NULL);
+   pcb-> thread_count = 0;
+
 }
 
 
@@ -125,6 +130,27 @@ void start_main_thread()
 }
 
 
+/* NEW */
+
+void start_alt_main_thread()
+{
+  int exitval;
+
+  Task call = CURTHREAD -> ptcb->task;
+  int argl = CURTHREAD ->ptcb->argl;
+  void* args= CURTHREAD->ptcb->args;
+
+  exitval = call(argl,args);
+
+  CURTHREAD->ptcb->exitval = exitval;
+
+  ThreadExit(exitval);
+
+
+}
+
+
+
 /*
 	System call to create a new process.
  */
@@ -169,8 +195,24 @@ Pid_t sys_Exec(Task call, int argl, void* args)
     newproc->args = malloc(argl);
     memcpy(newproc->args, args, argl);
   }
-  else
+  else {
     newproc->args=NULL;
+  }
+
+    if(call !=NULL){
+
+        Tid_t tid= CreateThread(call,argl,ars);
+
+
+        PTCB* main_ptcb = (PTCB*) tid;
+
+
+
+
+    }
+
+
+
 
   /* 
     Create and wake up the thread for the main function. This must be the last thing
