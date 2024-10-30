@@ -1,4 +1,3 @@
-
 #include <assert.h>
 #include "kernel_cc.h"
 #include "kernel_proc.h"
@@ -45,7 +44,7 @@ static inline void initialize_PCB(PCB* pcb)
   rlnode_init(& pcb->exited_node, pcb);
   pcb->child_exit = COND_INIT;
 
-/* new */
+/* additional multithreading initializations */
    rlnode_init(&pcb->ptcb_list, NULL);
    pcb-> thread_count = 0;
 
@@ -90,6 +89,7 @@ PCB* acquire_PCB()
     pcb->pstate = ALIVE;
     pcb_freelist = pcb_freelist->parent;
     process_count++;
+
   }
 
   return pcb;
@@ -114,8 +114,8 @@ void release_PCB(PCB* pcb)
  */
 
 /*
-	This function is provided as an argument to spawn,
-	to execute the main thread of a process.
+  This function is provided as an argument to spawn,
+  to execute the main thread of a process.
 */
 void start_main_thread()
 {
@@ -145,14 +145,12 @@ void start_alt_main_thread()
   CURTHREAD->ptcb->exitval = exitval;
 
   ThreadExit(exitval);
-
-
 }
 
 
 
 /*
-	System call to create a new process.
+  System call to create a new process.
  */
 Pid_t sys_Exec(Task call, int argl, void* args)
 {
@@ -201,12 +199,33 @@ Pid_t sys_Exec(Task call, int argl, void* args)
 
     if(call !=NULL){
 
-        Tid_t tid= CreateThread(call,argl,ars);
+        /* Create TCB*/
+        newproc->main_thread = spawn_thread(newproc,start_main_thread);
 
 
-        PTCB* main_ptcb = (PTCB*) tid;
+       /* PTCB MEMORY ALLOCATION */
+       PTCB* main_ptcb = (PTCB*) xmalloc(sizeof(PTCB));
+         
+
+        /* PTCB Initialization */
+        main_ptcb->task = call;
+        main_ptcb->argl = argl;
+        main_ptcb->args = newproc->args;
+        main_ptcb->exitval = 0;  /* Exit value initialization*/
+        main_ptcb->refcount=0;
+        main_ptcb->detached=0;
+
+        CondVarInit(&ptcb->exit_cv);
+        
+        /* pointer casting*/
+        Tid_t tid = (Tid_t) main_ptcb;
 
 
+        rlnode_init(&main_ptcb->ptcb_list_node, main_ptcb);
+        rlist_push_back(&newproc->ptcb_list, &main_ptcb->ptcb_list_node);  
+        newproc->thread_count++;
+        
+        wakeup(newproc->main_thread);
 
 
     }
@@ -219,16 +238,15 @@ Pid_t sys_Exec(Task call, int argl, void* args)
     we do, because once we wakeup the new thread it may run! so we need to have finished
     the initialization of the PCB.
    */
-  if(call != NULL) {
+  /*if(call != NULL) {
     newproc->main_thread = spawn_thread(newproc, start_main_thread);
-    wakeup(newproc->main_thread);
+    wakeup(newproc->main_thread);*/
   }
 
 
 finish:
   return get_pid(newproc);
 }
-
 
 /* System call */
 Pid_t sys_GetPid()
@@ -403,6 +421,5 @@ void sys_Exit(int exitval)
 
 Fid_t sys_OpenInfo()
 {
-	return NOFILE;
+  return NOFILE;
 }
-
