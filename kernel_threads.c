@@ -75,37 +75,7 @@ Tid_t sys_CreateThread(Task task, int argl, void* args)
 
 
 
-// Tid_t sys_CreateThread(Task task, int argl, void* args)
-// {
-//   PTCB* main_ptcb = xmalloc(sizeof(PTCB));
 
-//   if(main_ptcb == NULL){
-//     return NOTHREAD;
-//   }
-
-//   main_ptcb->tcb = spawn_thread(CURPROC, start_alt_main_thread);
-
-//   main_ptcb->task = task;
-//   main_ptcb->argl = argl;
-//   main_ptcb->args = args;
-
-//   main_ptcb->exit_cv = COND_INIT;
-//   main_ptcb->tcb->ptcb = main_ptcb;
-
-//   main_ptcb->detached = 0;
-//   main_ptcb->exited = 0;
-//   main_ptcb->refcount = 0;
-
-//   rlnode_init(&main_ptcb->ptcb_list_node, main_ptcb);
-//   rlist_push_back(&CURPROC->ptcb_list, & main_ptcb->ptcb_list_node);
-//   CURPROC->thread_count++;
-//   wakeup(main_ptcb->tcb);
-  
-
-
-
-//     return (Tid_t) main_ptcb;
-// }
 
 
 
@@ -206,14 +176,13 @@ int sys_ThreadJoin(Tid_t tid, int* exitval) {
         free(ptcb);
     }
 
+ if (ptcb->detached) {
+        return -1;
+    }
 
-
-
-    return 0; // Success
+    return 0;
+    
 }
-
-
-
 
 
 /**
@@ -245,10 +214,6 @@ if (tid == NOTHREAD) return -1 ;
     
     return 0; 
 }
-
-
-
-
 
 
 
@@ -344,9 +309,5 @@ if(curproc->thread_count==0 && get_pid(curproc) != 1){
   kernel_sleep(EXITED, SCHED_USER);
  
 }
-
-
-
-
 
 
