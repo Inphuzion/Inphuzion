@@ -128,7 +128,14 @@ typedef struct thread_control_block {
 	  */
 #endif
 
+//priority level of the MLFQ
+	int priority;
+
 } TCB;
+
+
+// define the number of queues
+#define PRIORITY_QUEUES 4 
 
 /** @brief Thread stack size.
 
