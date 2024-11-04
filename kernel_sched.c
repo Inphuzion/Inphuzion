@@ -37,6 +37,14 @@ CCB cctx[MAX_CORES];
 #define CURTHREAD (CURCORE.current_thread)
 
 
+//define values for MLFQ
+
+#define BOOST_INTERVAL 1000
+#define PRIORITY_QUEUES 10 // enter even number
+
+
+
+
 /*
 	This can be used in the preemptive context to
 	obtain the current thread.
@@ -173,7 +181,7 @@ TCB* spawn_thread(PCB* pcb, void (*func)())
 
 
 /* Set default priority */
-    tcb->priority = PRIORITY_QUEUES - 1; // Lowest priority by default
+    tcb->priority = (PRIORITY_QUEUES/2)+ (PRIORITY_QUEUES%2) ; // MID priority by default
 
 
 
@@ -335,23 +343,37 @@ static void sched_wakeup_expired_timeouts()
 */
 static TCB* sched_queue_select(TCB* current)
 {  
+	// TCB* next_thread = NULL;
+int pr = 0;
+	for(int i = PRIORITY_QUEUES -1  ; i>= 0; i--){
+		if (!is_rlist_empty(&SCHED[i])){
+			pr=i;
+			break;
+	}
+}
 
-
-	for(int i=0 ; i< PRIORITY_QUEUES; i++){
-		if ((!is_rlist_empty(&SCHED[i]))){
-
-	/* Get the head of the SCHED list */
-	rlnode* sel = rlist_pop_front(&SCHED[i]);
+/* Get the head of the SCHED list */
+	rlnode* sel = rlist_pop_front(&SCHED[pr]);
 
 	TCB* next_thread = sel->tcb; /* When the list is empty, this is NULL */
-	next_thread->its = QUANTUM;
-
-	return next_thread;}
-
-}
 	
-		return (current->state == READY) ? current : &CURCORE.idle_thread;
+
+if(next_thread==NULL) 
+next_thread= (current->state == READY) ? current : &CURCORE.idle_thread;
+
+
+	next_thread->its = QUANTUM;
+	return next_thread;
+
+	
+
 }
+
+
+
+
+
+
 
 /*
   Make the process ready.
@@ -416,27 +438,11 @@ void sleep_releasing(Thread_state state, Mutex* mx, enum SCHED_CAUSE cause,
 }
 
 
-#define BOOST_INTERVAL 100
+
+
+
+
 static int boost_counter = 0;
-
-// Function to boost the priority of all threads
-
-void boost_all_threads(){
-	
-	Mutex_Lock(&sched_spinlock);
-	for(int i = 1; i< PRIORITY_QUEUES; i++){
-		while(!is_rlist_empty(&SCHED[i])){
-			TCB* tcb= rlist_pop_front(&SCHED[i])->tcb;
-			tcb->priority = (tcb->priority < PRIORITY_QUEUES-1) ? tcb->priority +1 : tcb->priority;
-			rlist_push_back(&SCHED[tcb->priority], &tcb->sched_node);
-		}
-}
-Mutex_Unlock(&sched_spinlock);
-}
-
-
-
-
 
 /* This function is the entry point to the scheduler's context switching */
 
@@ -451,6 +457,22 @@ void yield(enum SCHED_CAUSE cause)
 	TCB* current = CURTHREAD; /* Make a local copy of current process, for speed */
 
 	Mutex_Lock(&sched_spinlock);
+
+
+
+    
+
+	/* Update CURTHREAD state */
+	if (current->state == RUNNING)
+		current->state = READY;
+
+	/* Update CURTHREAD scheduler data */
+	current->rts = remaining;
+	current->last_cause = current->curr_cause;
+	current->curr_cause = cause;
+
+	/* Wake up threads whose sleep timeout has expired */
+	sched_wakeup_expired_timeouts();
 
 	//adjust the priority based on scheduling cuase
 switch (cause) {
@@ -477,26 +499,23 @@ switch (cause) {
     }
 
 
-
-
-    // Increment boost counter and apply boosting if needed
-    boost_counter++;
-    if (boost_counter >= BOOST_INTERVAL) {
-        boost_all_threads();
+// Increment boost counter and apply boosting if needed
+     boost_counter++;
+    if (boost_counter > BOOST_INTERVAL) {
+        // Mutex_Lock(&sched_spinlock);
+    	for (int i = PRIORITY_QUEUES-2; i >=0 ; i--) {
+        while (!is_rlist_empty(&SCHED[i])) {
+            rlnode* current = rlist_pop_front(&SCHED[i]);
+              // Move to higher priority 
+            rlist_push_back(&SCHED[i+1],current);
+            current->tcb->priority= i+1;
+        }
+    }
+    // Mutex_Unlock(&sched_spinlock);;
         boost_counter = 0; // Reset the boost counter
     }
 
-	/* Update CURTHREAD state */
-	if (current->state == RUNNING)
-		current->state = READY;
 
-	/* Update CURTHREAD scheduler data */
-	current->rts = remaining;
-	current->last_cause = current->curr_cause;
-	current->curr_cause = cause;
-
-	/* Wake up threads whose sleep timeout has expired */
-	sched_wakeup_expired_timeouts();
 
 	/* Get next */
 	TCB* next = sched_queue_select(current);
@@ -512,6 +531,9 @@ switch (cause) {
 		CURTHREAD = next;
 		cpu_swap_context(&current->context, &next->context);
 	}
+
+
+	
 
 	/* This is where we get after we are switched back on! A long time
 	   may have passed. Start a new timeslice...
@@ -635,3 +657,5 @@ void run_scheduler()
 	cpu_interrupt_handler(ALARM, NULL);
 	cpu_interrupt_handler(ICI, NULL);
 }
+
+

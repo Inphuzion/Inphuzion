@@ -135,7 +135,7 @@ typedef struct thread_control_block {
 
 
 // define the number of queues
-#define PRIORITY_QUEUES 4 
+#define NUMBER_OF_QUEUES  200 
 
 /** @brief Thread stack size.
 
