@@ -181,7 +181,7 @@ TCB* spawn_thread(PCB* pcb, void (*func)())
 
 
 /* Set default priority */
-    tcb->priority = (PRIORITY_QUEUES/2)+ (PRIORITY_QUEUES%2) ; // MID priority by default
+    tcb->priority = (PRIORITY_QUEUES/2) ; // MID priority by default
 
 
 

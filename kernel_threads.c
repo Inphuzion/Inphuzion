@@ -154,8 +154,14 @@ int sys_ThreadJoin(Tid_t tid, int* exitval) {
        
     }
 
+
+
     ptcb->refcount--; 
     // Assign the exit value upon wakeup
+
+    if (ptcb->detached) {
+        return -1;
+    }
 
     if (exitval != NULL){
     *exitval = ptcb->exitval;
@@ -271,7 +277,7 @@ if(curproc->thread_count==0 && get_pid(curproc) != 1){
     rlist_push_front(& curproc->parent->exited_list, &curproc->exited_node);
     kernel_broadcast(& curproc->parent->child_exit);
 
-  } // ENDS the if
+   // ENDS the if
 
 
   assert(is_rlist_empty(& curproc->children_list));
@@ -303,7 +309,7 @@ if(curproc->thread_count==0 && get_pid(curproc) != 1){
   /* Now, mark the process as exited. */
   curproc->pstate = ZOMBIE;
 
-
+}
  
   /* Bye-bye cruel world */
   kernel_sleep(EXITED, SCHED_USER);
