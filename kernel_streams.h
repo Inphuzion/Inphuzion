@@ -47,6 +47,24 @@ typedef struct file_control_block
 } FCB;
 
 
+#define PIPE_BUFFER_SIZE 1024  // Define the buffer size for the pipe
+
+typedef struct pipe_control_block {
+    FCB *reader, *writer;            // File control blocks for pipe ends
+    CondVar has_space;               // Synchronization for space
+    CondVar has_data;                // Synchronization for data
+    int w_position, r_position;      // Write and read positions in buffer
+    char BUFFER[PIPE_BUFFER_SIZE];   // Circular buffer for data
+} pipe_cb;
+
+
+
+int pipe_write(void* pipecb_t, const char *buf, unsigned int n);
+int pipe_read(void* pipecb_t, char *buf, unsigned int n);
+int pipe_writer_close(void* _pipecb);
+int pipe_reader_close(void* _pipecb);
+
+
 
 /** 
   @brief Initialization for files and streams.
