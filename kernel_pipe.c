@@ -6,135 +6,158 @@
 #include "kernel_dev.h"
 #include "kernel_cc.h"
 
-file_ops static reader_file_ops = {
+static  file_ops reader_file_ops = {
     .Open = NULL,
     .Read = pipe_read,
-    .Write = NULL,  // Readers do not write
+    .Write = not_allowed_r,  // Readers do not write
     .Close = pipe_reader_close
 };
 
-file_ops static writer_file_ops = {
+static file_ops writer_file_ops = {
     .Open = NULL,
-    .Read = NULL,  // Writers do not read
+    .Read = not_allowed_w,  // Writers do not read
     .Write = pipe_write,
     .Close = pipe_writer_close
 };
 
-int sys_Pipe(pipe_t* pipe) {
-    Fid_t r, w; // File descriptors for read and write ends
-    FCB *read_fcb, *write_fcb; // File control blocks for reading and writing
-    pipe_cb *pcb; // Pipe control block to manage the buffer
 
+int sys_Pipe(pipe_t* pipe) {	
+    Fid_t fid[2];
+    FCB* fcb[2];
 
-     // Allocate memory for the pipe control block
-    pcb = (pipe_cb*)xmalloc(sizeof(pipe_cb));
-    
+    // Reserve file control blocks
+    if (FCB_reserve(2, fid, fcb) != 1) return -1;
+    pipe->read = fid[0];
+    pipe->write = fid[1];
+
+    // Allocate memory for the pipe control block
+    pipe_cb* pcb = (pipe_cb*) xmalloc(sizeof(pipe_cb));
+    if (pcb == NULL) return -1;
 
     // Initialize the pipe control block
-    pcb->reader = read_fcb;
-    pcb->writer = write_fcb;
-    pcb->r_position =0;
-     pcb->w_position = 0;
-    memset(pcb->BUFFER, 0, PIPE_BUFFER_SIZE); // Clear the buffer
-
-
-    // Reserve FCBs and file descriptors
-    if (!FCB_reserve(2, &r, &read_fcb)) {
-        return -1; // Failed to reserve FCB for reader
+    if (pcb == NULL || fcb[0] == NULL || fcb[1] == NULL) {
+        return -1;
     }
-    if (!FCB_reserve(2, &w, &write_fcb)) {
-        FCB_unreserve(1, &r, &read_fcb); // Rollback if writer reservation fails
-        return -1; // Failed to reserve FCB for writer
-    }
+    pcb->reader = fcb[0];
+    pcb->writer = fcb[1];
 
-   
+    pcb->has_space = COND_INIT;
+    pcb->has_data = COND_INIT;
 
-   	
+    pcb->w_position = 0;
+    pcb->r_position = 0;
 
-    // Set up file operations for reader and writer
-    read_fcb->streamobj = (void*)pcb;
-    read_fcb->streamfunc = &reader_file_ops;
+    // Assign control block and operations
+    fcb[0]->streamobj = pcb;
+    fcb[1]->streamobj = pcb;
 
-    write_fcb->streamobj = (void*)pcb;
-    write_fcb->streamfunc = &writer_file_ops;
+    fcb[0]->streamfunc = &reader_file_ops;
+    fcb[1]->streamfunc = &writer_file_ops;
 
-    // Assign the FCBs to the current process’s file descriptor table
-    CURPROC->FIDT[r] = read_fcb;
-    CURPROC->FIDT[w] = write_fcb;
-
-    // Return success with the pipe file descriptors
-    pipe->read = r;
-    pipe->write = w;
-
-    return 0; // Pipe successfully created
+    return 0;
 }
+
 
 int pipe_read(void* pipecb_t, char* buf, unsigned int n) {
-    pipe_cb* pcb = (pipe_cb*)pipecb_t;
-    int i = 0;
+    // Cast the input pointer to the pipe control block structure
+    pipe_cb* pcb = (pipe_cb*) pipecb_t;
 
-    // Check if the read end is closed (and buffer is empty)
-    if (pcb->reader == NULL && pcb->r_position == pcb->w_position) {
-        return 0;  // End of data
+    // Validate input
+    if (!pcb || !pcb->reader) return -1;
+
+    // Initialize the byte counter
+    int bytesRead = 0;
+
+    // Wait if the pipe is empty and a writer exists
+    while (pcb->r_position == pcb->w_position && pcb->writer != NULL) {
+        kernel_wait(&(pcb->has_data), SCHED_PIPE);
     }
 
-    // Loop to read data from the pipe
-    while (i < n) {
-        if (pcb->r_position == pcb->w_position) {
-            if (pcb->writer == NULL) {
-                return 0;  // End of data (write end closed)
-            }
-            // Block until data is available in the buffer
-            kernel_wait(&pcb->has_data, SCHED_PIPE);  // Wait for data
+    // Special case: No writer exists, but there may still be data to read
+    if (pcb->writer == NULL) {
+        while (pcb->r_position < pcb->w_position) {
+            if (bytesRead == n) return bytesRead; // Stop if the buffer is full
+            buf[bytesRead++] = pcb->BUFFER[pcb->r_position];
+            pcb->r_position = (pcb->r_position + 1) % PIPE_BUFFER_SIZE;
         }
-
-        // Read one byte from the buffer
-        buf[i] = pcb->BUFFER[pcb->r_position];
-        pcb->r_position = (pcb->r_position + 1) % PIPE_BUFFER_SIZE;
-
-        // Notify writer that space is available
-        kernel_broadcast(&pcb->has_space);
-
-        i++;
+        return bytesRead;
     }
 
-    return i;  // Return the number of bytes read
+    // Read from the buffer until it reaches the writer position or the buffer limit
+    while (bytesRead < n && pcb->r_position != pcb->w_position) {
+        buf[bytesRead++] = pcb->BUFFER[pcb->r_position];
+        pcb->r_position = (pcb->r_position + 1) % PIPE_BUFFER_SIZE;
+    }
+
+    // Signal that space is now available in the pipe
+    kernel_broadcast(&(pcb->has_space));
+
+    return bytesRead;
 }
 
+
+
 int pipe_write(void* pipecb_t, const char* buf, unsigned int n) {
-    pipe_cb* pcb = (pipe_cb*)pipecb_t;
-    int bytes_written = 0;
+    // Cast the input pointer to the pipe control block structure
+    pipe_cb* pcb = (pipe_cb*) pipecb_t;
 
-    // Continue writing until all requested bytes are written or the buffer is full
-    while (bytes_written < n) {
-        while ((pcb->w_position + 1) % PIPE_BUFFER_SIZE == pcb->r_position) {
-            kernel_wait(&pcb->has_space,SCHED_PIPE);  // Wait until space is available
-        }
+    // Validate input
+    if (!pcb || !pcb->writer || !pcb->reader) return -1;
 
-        // Write data into the buffer at the current write position
-        pcb->BUFFER[pcb->w_position] = buf[bytes_written];
-        pcb->w_position = (pcb->w_position + 1) % PIPE_BUFFER_SIZE;
-        bytes_written++;
+    // Initialize the counter for bytes written
+    int bytesWritten = 0;
 
-        // Notify the reader that new data is available
-        kernel_broadcast(&pcb->has_data);
+    // Wait if the buffer is full and a reader exists
+    while ((pcb->w_position + 1) % PIPE_BUFFER_SIZE == pcb->r_position && pcb->reader != NULL) {
+        kernel_wait(&(pcb->has_space), SCHED_PIPE);
     }
 
-    return bytes_written;  // Return the number of bytes successfully written
+    // Write data to the buffer until it's full or all bytes are written
+    while (bytesWritten < n && (pcb->w_position + 1) % PIPE_BUFFER_SIZE != pcb->r_position) {
+        pcb->BUFFER[pcb->w_position] = buf[bytesWritten++];
+        pcb->w_position = (pcb->w_position + 1) % PIPE_BUFFER_SIZE;
+    }
+
+    // Notify that data is available for reading
+    kernel_broadcast(&(pcb->has_data));
+
+    return bytesWritten; // Return the number of bytes successfully written
+}
+
+
+
+int pipe_writer_close(void* _pipecb) {
+    pipe_cb* pcb = (pipe_cb*)_pipecb;
+    pcb->writer = NULL;  // Close the write end
+     if(pcb->reader == NULL){
+		pcb = NULL;
+		free(pcb);
+		return 0;
+	} // Close the read end
+    kernel_broadcast(&pcb->has_data);  // Notify the reader that no more data will be written
+
+    return 0;  // Successfully closed
 }
 
 int pipe_reader_close(void* _pipecb) {
     pipe_cb* pcb = (pipe_cb*)_pipecb;
-    pcb->reader = NULL;  // Close the read end
+    pcb->reader = NULL; 
+    if(pcb->writer == NULL){
+		pcb = NULL;
+		free(pcb);
+		return 0;
+	}
+
     kernel_broadcast(&pcb->has_data);  // Notify that no more data is available
 
     return 0;  // Successfully closed
 }
 
-int pipe_writer_close(void* _pipecb) {
-    pipe_cb* pcb = (pipe_cb*)_pipecb;
-    pcb->writer = NULL;  // Close the write end
-    kernel_broadcast(&pcb->has_data);  // Notify the reader that no more data will be written
 
-    return 0;  // Successfully closed
-}
+
+
+int not_allowed_r(void* pipecb_t,  char* buf, unsigned int n) {
+	return  -1;}
+int not_allowed_w(void* pipecb_t, const char* buf, unsigned int n) {
+	return  -1;}
+
