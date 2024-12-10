@@ -362,10 +362,89 @@ void sys_Exit(int exitval)
 }
 
 
+static file_ops info_operations = {
+    .Open = NULL,
+    .Read = sysinfo_read,
+    .Write = NULL,
+    .Close = sysinfo_close
+};
 
+int sysinfo_read(void* procinfo, char* buff, unsigned int size) {
+    // Validate input parameters
+    if (!procinfo || !buff || size < sizeof(procinfo)) {
+        return -1;  // Invalid arguments
+    }
 
-Fid_t sys_OpenInfo()
-{
-  return NOFILE;
+    info_cb* icb = (info_cb*)procinfo;
+    PCB* curproc = NULL;
+
+    // Iterate through process table to find the next valid process
+    while (icb->cursor < MAX_PROC) {
+        PCB* candidate = &PT[icb->cursor];
+        icb->cursor++;
+
+        if (candidate->pstate != FREE) {
+            curproc = candidate;
+            break;
+        }
+    }
+
+    // If no valid process is found, return -1
+    if (!curproc) {
+        return -1;
+    }
+
+     // Populate process information
+    icb->info.pid = get_pid(curproc);
+    icb->info.ppid = get_pid(curproc->parent);
+    icb->info.alive = (curproc->pstate == ALIVE);
+    icb->info.main_task = curproc->main_task;
+    icb->info.argl = curproc->argl;
+    icb->info.thread_count = curproc->thread_count;
+
+    // Copy arguments (truncated if necessary)
+    size_t copy_size = (curproc->argl <= PROCINFO_MAX_ARGS_SIZE) ? curproc->argl : PROCINFO_MAX_ARGS_SIZE;
+    memcpy(icb->info.args, curproc->args, copy_size);
+
+    // Copy the procinfo structure to the buffer
+    memcpy(buff, &icb->info, size);
+
+    return sizeof(procinfo);  // Return the size of the procinfo structure
 }
 
+int sysinfo_close(void* procinfo) {
+    if (!procinfo) {
+        return -1;  // Invalid input
+    }
+
+    // Free the allocated info_cb structure
+    free(procinfo);
+    return 0;  // Success
+}
+
+Fid_t sys_OpenInfo() {
+    Fid_t fid;
+    FCB* fcb;
+
+    // Reserve a file descriptor
+    if (!FCB_reserve(1, &fid, &fcb)) {
+        return NOFILE;  // Failed to reserve a file descriptor
+    }
+
+    // Allocate memory for the info_cb structure
+    info_cb* icb = (info_cb*)xmalloc(sizeof(info_cb));
+    if (!icb) {
+        FCB_unreserve(1, &fid, &fcb);
+        return NOFILE;  // Memory allocation failed
+    }
+
+    // Initialize info_cb
+    icb->cursor = 0;
+    memset(&icb->info, 0, sizeof(procinfo));
+
+    // Set up the file control block
+    fcb->streamobj = icb;
+    fcb->streamfunc = &info_operations;
+
+    return fid;  // Return the file descriptor
+}

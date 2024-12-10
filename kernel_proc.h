@@ -84,7 +84,14 @@ typedef struct process_thread_control_block{
 } PTCB;
 
 
+//Open info additions
+typedef struct info_cb {
+    unsigned int cursor; // Tracks current position in the process table
+    procinfo info;       // Stores current process information
+} info_cb;
 
+int sysinfo_read(void* procinfo, char* buff, unsigned int size);
+int sysinfo_close(void* procinfo);
 
 
 /**
