@@ -1,324 +1,388 @@
 
-// #include "tinyos.h"
-// #include "kernel_streams.h"
-// #include "kernel_streams.h"
-// #include "kernel_sched.h"
-// #include "kernel_proc.h"
-// #include "kernel_dev.h"
-// #include "kernel_cc.h"
-// #include "kernel_pipe.c"
-
-
-
-
-// file_ops socket_file_ops = {
-//     .Open = socket_open,        // Function to handle opening the socket
-//     .Read = socket_read,        // Function to handle reading from the socket
-//     .Write = socket_write,      // Function to handle writing to the socket
-//     .Close = socket_close       // Function to handle closing the socket
-// };
-
-
-// int socket_open(FCB* fcb) {
-//     // Typically, socket is already initialized when created
-//     // So this function can remain empty or do any setup required
-//     return 0;  // Success
-// }
-
-// int socket_read(FCB* fcb, char* buf, unsigned int size) {
-//     socket_cb* socket = (socket_cb*)fcb->streamobj;
-    
-//     if (socket->type != SOCKET_PEER) {
-//         return -1;  // Can't read from an unbound or listener socket
-//     }
-
-//     // Read from the peer socket's read pipe
-//     return pipe_read(socket->peer_socket.read_pipe, buf, size);
-// }
-
-// int socket_write(FCB* fcb, const char* buf, unsigned int size) {
-//     socket_cb* socket = (socket_cb*)fcb->streamobj;
-    
-//     if (socket->type != SOCKET_PEER) {
-//         return -1;  // Can't write to an unbound or listener socket
-//     }
-
-//     // Write to the peer socket's write pipe
-//     return pipe_write(socket->peer_socket.write_pipe, buf, size);
-// }
-
-// int socket_close(FCB* fcb) {
-//     socket_cb* socket = (socket_cb*)fcb->streamobj;
-    
-//     if (socket->type == SOCKET_PEER) {
-//         // Close the pipes for peer sockets
-//         pipe_writer_close(socket->peer_socket.write_pipe);
-//         pipe_reader_close(socket->peer_socket.read_pipe);
-//     }
-    
-//     // Clean up the socket control block
-//     free(socket);
-//     fcb->streamobj = NULL;
-    
-//     return 0;  // Success
-// }
-
-
-
-// Fid_t sys_Socket(port_t port) {
-//     FCB *fcb;
-//     Fid_t fid;
-//     socket_cb *socket;
-
-//     // Step 1: Check if the port is valid
-//     if (port < 1 || port > MAX_PORT) {
-//         return NOFILE;  // Invalid port number
-//     }
-
-//     // Step 2: Reserve a file descriptor and get the associated FCB
-//     if (!FCB_reserve(1, &fid, &fcb)) {
-//         return NOFILE;  // No file descriptors available
-//     }
-
-//     // Step 3: Allocate memory for the socket control block (SCB)
-//     socket = (socket_cb*)xmalloc(sizeof(socket_cb));
-//     if (!socket) {
-//         FCB_unreserve(1, &fid, &fcb);  // Rollback if allocation fails
-//         return NOFILE;  // Memory allocation failure
-//     }
-
-//     // Step 4: Initialize the socket control block (SCB)
-//     socket->refcount = 0;  // Initial reference count for the socket
-//     socket->port = port;
-//     socket->type = (port == NOPORT) ? SOCKET_UNBOUND : SOCKET_PEER;  // Mark the socket as unbound or peer
-//     memset(&socket->peer_s, 0, sizeof(socket->peer_s));  // Initialize peer socket (if needed)
-
-//     // Step 5: Assign the socket control block to the file descriptor's stream object
-//     fcb->streamobj = socket;
-//     fcb->streamfunc = &socket_file_ops;  // Set file operations (to be defined elsewhere)
-
-//     return fid;  // Return the file descriptor for the created socket
-
-
-// int sys_Listen(Fid_t sock) {
-//     FCB *fcb;
-//     socket_cb *socket;
-
-//     // Step 1: Get the FCB for the socket
-//     if (!FCB_get(sock, &fcb)) {
-//         return -1;  // Invalid file descriptor
-//     }
-
-//     // Step 2: Retrieve the socket control block
-//     socket = (socket_cb*)fcb->streamobj;
-
-//     // Step 3: Ensure the socket is bound to a valid port
-//     if (socket->port == NOPORT) {
-//         return -1;  // Socket is not bound to a valid port
-//     }
-
-//     // Step 4: Ensure the socket is not already a listener
-//     if (socket->type == SOCKET_LISTENER) {
-//         return -1;  // Socket is already a listener
-//     }
-
-//     // Step 5: Mark the socket as a listener
-//     socket->type = SOCKET_LISTENER;
-
-//     // Step 6: Initialize the listener socket's request queue
-//     rlnode_new(&socket->listener_socket.queue);  // Initialize the request queue
-//     socket->listener_socket.req_available = COND_INIT;  // Initialize the condition variable
-
-//     // Step 7: Add the socket to the listener map (PORT_MAP)
-//     PORT_MAP[socket->port] = socket;
-
-//     return 0;  // Successfully initialized as a listener
-// }
-
-
-// Fid_t sys_Accept(Fid_t lsock) {
-//     FCB *fcb;
-//     socket_cb *listener_socket;
-//     rlnode *req_node;
-//     connection_request *req;
-
-//     // Step 1: Check if the file descriptor is valid
-//     if (!FCB_get(lsock, &fcb)) {
-//         return NOFILE;  // Invalid file descriptor
-//     }
-
-//     // Step 2: Retrieve the listener socket control block
-//     listener_socket = (socket_cb*)fcb->streamobj;
-
-//     // Step 3: Ensure the socket is a listener
-//     if (listener_socket->type != SOCKET_LISTENER) {
-//         return NOFILE;  // This socket is not a listener
-//     }
-
-//     // Step 4: Increase refcount to prevent socket from being closed while we are waiting
-//     listener_socket->refcount++;
-
-//     // Step 5: Wait for a connection request in the listener's queue
-//     while (is_rlist_empty(&listener_socket->listener_socket.queue)) {
-//         kernel_timedwait(&listener_socket->listener_socket.req_available, NULL);  // Wait for a connection request
-//     }
-
-//     // Step 6: Extract the connection request from the queue
-//     req_node = rlist_pop_front(&listener_socket->listener_socket.queue);
-//     req = (connection_request*)req_node->obj;
-
-//     // Step 7: Check if the port is still valid (listener socket may have been closed)
-//     if (listener_socket->port == NOPORT) {
-//         return NOFILE;  // Socket is no longer valid
-//     }
-
-//     // Step 8: Mark the connection request as admitted (i.e., accepted)
-//     req->admitted = 1;
-
-//     // Step 9: Create the peer socket for communication
-//     Fid_t peer_fid = sys_Socket(listener_socket->port);  // Assuming sys_Socket handles binding
-
-//     // Step 10: Initialize the peer socket (set up its connection)
-//     FCB *peer_fcb;
-//     socket_cb *peer_socket;
-//     FCB_get(peer_fid, &peer_fcb);
-//     peer_socket = (socket_cb*)peer_fcb->streamobj;
-
-//     // Set the peer socket type and initialize its peer connection
-//     peer_socket->type = SOCKET_PEER;
-//     peer_socket->peer_socket = listener_socket->peer_socket;
-
-//     // Step 11: Signal the Connect side (client) that the connection is established
-//     kernel_broadcast(&peer_socket->peer_socket.req_available);  // Notify the client side
-
-//     // Step 12: Release the connection request (freeing the request node)
-//     free(req_node);
-
-//     // Step 13: Decrease the refcount for the listener socket after processing the request
-//     listener_socket->refcount--;
-
-//     // Step 14: Return the peer file descriptor for the established connection
-//     return peer_fid;
-// }
-
-
-// int sys_Connect(Fid_t sock, port_t port, timeout_t timeout) {
-//     FCB *fcb;
-//     socket_cb *socket;
-//     connection_request *req;
-//     socket_cb *listener_socket;
-//     Fid_t peer_fid;
-//     rlnode *req_node;
-
-//     // Step 1: Check if the socket is valid
-//     if (!FCB_get(sock, &fcb)) {
-//         return -1;  // Invalid socket file descriptor
-//     }
-
-//     socket = (socket_cb*)fcb->streamobj;
-
-//     // Step 2: Ensure the socket is unbound (i.e., it’s not yet connected)
-//     if (socket->type != SOCKET_UNBOUND) {
-//         return -1;  // Socket is already connected or in the wrong state
-//     }
-
-//     // Step 3: Check if the port is valid and there is a listener on the port
-//     if (port < 1 || port > MAX_PORT || PORT_MAP[port] == NULL) {
-//         return -1;  // Invalid port or no listener on the port
-//     }
-
-//     // Step 4: Increase refcount to prevent the socket from being closed while we wait
-//     socket->refcount++;
-
-//     // Step 5: Create a connection request and fill in the details
-//     req = (connection_request*)xmalloc(sizeof(connection_request));
-//     if (!req) {
-//         socket->refcount--;  // Decrease refcount if allocation fails
-//         return -1;  // Memory allocation failure
-//     }
-
-//     req->sock = sock;
-//     req->port = port;
-//     req->admitted = 0;  // Initially not admitted
-
-//     // Step 6: Add the connection request to the listener's request queue
-//     listener_socket = (socket_cb*)PORT_MAP[port];
-//     rlnode_init(&req_node, req);
-//     rlist_push_back(&listener_socket->listener_socket.queue, req_node);
-//     kernel_signal(&listener_socket->listener_socket.req_available);  // Notify listener
-
-//     // Step 7: Wait for the request to be admitted (i.e., connection accepted)
-//     while (!req->admitted) {
-//         int ret = kernel_timedwait(&req->req_available, timeout);
-//         if (ret == -1) {  // Timeout occurred
-//             socket->refcount--;  // Decrease refcount if timed out
-//             free(req);  // Free connection request
-//             return -1;
-//         }
-//     }
-
-//     // Step 8: Once admitted, create the peer socket for communication
-//     peer_fid = sys_Socket(port);
-//     if (peer_fid == NOFILE) {
-//         socket->refcount--;  // Decrease refcount if socket creation fails
-//         free(req);  // Free connection request
-//         return -1;
-//     }
-
-//     FCB *peer_fcb;
-//     socket_cb *peer_socket;
-//     FCB_get(peer_fid, &peer_fcb);
-//     peer_socket = (socket_cb*)peer_fcb->streamobj;
-
-//     // Step 9: Set up the peer socket and link to the listener socket
-//     peer_socket->type = SOCKET_PEER;
-//     peer_socket->peer_socket = listener_socket->peer_socket;
-
-//     // Step 10: Signal the peer (client side) that the connection is established
-//     kernel_signal(&peer_socket->peer_socket.req_available);
-
-//     // Step 11: Clean up - decrease the refcount for the unbound socket and free the request
-//     socket->refcount--;
-//     free(req);
-
-//     // Step 12: Return the peer file descriptor for the established connection
-//     return peer_fid;
-
-
-// int sys_ShutDown(Fid_t sock, shutdown_mode how)
-// {
-// 	return -1;
-// }
-
-
-
 #include "tinyos.h"
+#include "kernel_streams.h"
+#include "kernel_sched.h"
+#include "kernel_proc.h"
+#include "kernel_dev.h"
+#include "kernel_cc.h"
+#include "kernel_socket.h"
 
 
-Fid_t sys_Socket(port_t port)
-{
-    return NOFILE;
+
+static file_ops socket_file_ops = {
+    .Open = NULL,        // Function to handle opening the socket
+    .Read = socket_read,        // Function to handle reading from the socket
+    .Write = socket_write,      // Function to handle writing to the socket
+    .Close = socket_close       // Function to handle closing the socket
+};
+
+
+
+int socket_read(void* socket, char* buf, unsigned int len) {
+    if (socket == NULL || buf == NULL || len == 0) {
+        return -1; // Invalid parameters
+    }
+
+    SCB* scb = (SCB*)socket;
+    if (scb->type != SOCKET_PEER || scb->peer.read_pipe == NULL) {
+        return -1; // Can only read from a peer socket with a valid read pipe
+    }
+
+    // Perform the read operation from the pipe and return the number of bytes read
+    int bytes_read = pipe_read(scb->peer.read_pipe, buf, len);
+    return (bytes_read >= 0) ? bytes_read : -1; // Ensure return value is valid
 }
 
-int sys_Listen(Fid_t sock)
-{
-    return -1;
+int socket_write(void* socket, const char* buf, unsigned int len) {
+    if (socket == NULL || buf == NULL || len == 0) {
+        return -1; // Invalid parameters
+    }
+
+    SCB* scb = (SCB*)socket;
+    if (scb->type != SOCKET_PEER || scb->peer.write_pipe == NULL) {
+        return -1; // Can only write to a peer socket with a valid write pipe
+    }
+
+    // Perform the write operation to the pipe and return the number of bytes written
+    int bytes_written = pipe_write(scb->peer.write_pipe, buf, len);
+    return (bytes_written >= 0) ? bytes_written : -1; // Ensure return value is valid
+}
+
+int socket_close(void* socket) {
+    if (socket == NULL) {
+        return -1; // Invalid socket control block
+    }
+
+    SCB* scb = (SCB*)socket;
+    int result = 0;
+
+    switch (scb->type) {
+        case SOCKET_LISTENER:
+            // Remove listener's port mapping
+            if (scb->port <= MAX_PORT) {
+                PORT_MAP[scb->port] = NULL;
+            }
+
+            // Notify that the listener's requests are available
+            kernel_signal(&scb->listener.req_available);
+            break;
+
+        case SOCKET_PEER:
+            // Close the write pipe for peer sockets
+            if (scb->peer.write_pipe != NULL) {
+                if (pipe_writer_close(scb->peer.write_pipe) != 0) {
+                    result = -1; // Error occurred during write pipe closure
+                }
+            }
+
+            // Close the read pipe for peer sockets
+            if (scb->peer.read_pipe != NULL) {
+                if (pipe_reader_close(scb->peer.read_pipe) != 0) {
+                    result = -1; // Error occurred during read pipe closure
+                }
+            }
+            break;
+
+        default:
+            return -1; // Unsupported socket type
+    }
+
+    return result; // Return success or failure
 }
 
 
-Fid_t sys_Accept(Fid_t lsock)
-{
-    return NOFILE;
+
+pipe_cb* init_pipe(FCB* fcb[2]) {
+    pipe_cb* pipe = (pipe_cb*)xmalloc(sizeof(pipe_cb));
+
+    pipe->reader = fcb[0];
+    pipe->writer = fcb[1];
+    pipe->has_space = COND_INIT;
+    pipe->has_data = COND_INIT;
+    pipe->w_position = 0;
+    pipe->r_position = 0;
+
+    return pipe;
+}
+
+request_connection* init_request_connection(SCB* client_scb) {
+    // Allocate memory 
+    request_connection* rc = (request_connection*)xmalloc(sizeof(request_connection));
+
+    // Initialize 
+    rc->admitted = 0;                  // Connection is not yet admitted
+    rc->peer = client_scb;             // Associate the request with the client's socket control block
+    rc->connected_cv = COND_INIT;      // Initialize the condition variable for signaling connection status
+
+    // Initialize the queue node for adding the request to a listener's queue
+    rlnode_init(&rc->queue_node, rc);
+
+    return rc;  // Return the pointer to the initialized connection request
 }
 
 
-int sys_Connect(Fid_t sock, port_t port, timeout_t timeout)
-{
-    return -1;
+Fid_t sys_Socket(port_t port) {
+    if (port < NOPORT || port > MAX_PORT) return -1;
+
+    Fid_t fid[1];
+    FCB* fcb[1];
+
+    if (FCB_reserve(1, fid, fcb) != 1) return -1;
+
+    // Inline logic for initializing an SCB (Socket Control Block)
+    SCB* scb = (SCB*)xmalloc(sizeof(SCB));
+    scb->refcount = 0;
+    scb->port = port;
+    scb->fcb = fcb[0];
+    scb->type = SOCKET_UNBOUND;
+
+    fcb[0]->streamobj = scb;
+    fcb[0]->streamfunc = &socket_file_ops;
+
+    if (PORT_MAP[port] == NULL) PORT_MAP[port] = scb;
+
+    return fid[0];
 }
 
 
-int sys_ShutDown(Fid_t sock, shutdown_mode how)
-{
-    return -1;
+int sys_Listen(Fid_t sock) {
+    // Retrieve the file control block (FCB) for the given file descriptor
+    FCB* fcb = get_fcb(sock);
+    if (fcb == NULL || fcb->streamfunc != &socket_file_ops) {
+        return -1;  // Invalid file descriptor or unsupported file operations
+    }
+
+    // Get the socket control block (SCB) associated with the FCB
+    SCB* scb = (SCB*)fcb->streamobj;
+    if (scb == NULL) {
+        return -1;  // Invalid socket control block
+    }
+
+    // Validate the port number
+    if (scb->port <= NOPORT || scb->port > MAX_PORT) {
+        return -1;  // Invalid port
+    }
+
+    // Ensure no other listener is already bound to this port
+    if (PORT_MAP[scb->port] != NULL && PORT_MAP[scb->port]->type == SOCKET_LISTENER) {
+        return -1;  // Port already has a listener
+    }
+
+    // Ensure the socket is currently unbound
+    if (scb->type != SOCKET_UNBOUND) {
+        return -1;  // Socket is not unbound
+    }
+
+    // Transition the socket into a listener
+    scb->type = SOCKET_LISTENER;
+
+    // Initialize the listener's queue and condition variable
+    rlnode_init(&scb->listener.queue, NULL);  // Initialize the queue as empty
+    scb->listener.req_available = COND_INIT; // Initialize the condition variable
+
+    return 0;  // Successfully set up as a listener
 }
+
+Fid_t sys_Accept(Fid_t lsock) {    
+    // Retrieve the file control block (FCB) for the listening socket
+    FCB* fcb = get_fcb(lsock);
+    if (!fcb || fcb->streamfunc != &socket_file_ops) {
+        return NOFILE;  // Invalid file descriptor or unsupported operations
+    }
+
+    // Get the socket control block (SCB) associated with the FCB
+    SCB* listener_scb = (SCB*)fcb->streamobj;
+    if (!listener_scb) {
+        return -1;  // Invalid listener SCB
+    }
+
+    // Validate the listener socket
+    if (listener_scb->port <= NOPORT || listener_scb->port > MAX_PORT) {
+        return -1;  // Invalid port
+    }
+    if (listener_scb->type == SOCKET_PEER) {
+        return -1;  // Cannot accept on a peer socket
+    }
+    if (PORT_MAP[listener_scb->port]->type != SOCKET_LISTENER) {
+        return -1;  // Port is not associated with a listener
+    }
+
+    // Prevent socket closure during wait
+    listener_scb->refcount++;
+
+    // Wait for a connection request
+    while (is_rlist_empty(&listener_scb->listener.queue)) {
+        kernel_wait(&listener_scb->listener.req_available, SCHED_IO);
+
+        // Check if the listener socket is still valid
+        if (!PORT_MAP[listener_scb->port]) {
+            listener_scb->refcount--;
+            return -1;  // Listener closed while waiting
+        }
+    }
+
+    // Decrease reference count after exiting the wait
+    if (listener_scb->refcount > 0) {
+        listener_scb->refcount--;
+    }
+
+    // Create a server socket for the accepted connection
+    Fid_t serverFid = sys_Socket(listener_scb->port);
+    if (serverFid == NOFILE) {
+        return -1;  // Failed to create a new server socket
+    }
+
+    FCB* serverFcb = get_fcb(serverFid);
+    if (!serverFcb) {
+        return -1;  // Failed to retrieve the server's FCB
+    }
+
+    SCB* server_scb = (SCB*)serverFcb->streamobj;
+    if (!server_scb) {
+        return -1;  // Failed to retrieve the server's SCB
+    }
+
+    // Retrieve and process the connection request
+    rlnode* requestNode = rlist_pop_front(&listener_scb->listener.queue);
+    request_connection* rc = (request_connection*)requestNode->obj;
+
+    SCB* client_scb = rc->peer;
+    if (!client_scb) {
+        return -1;  // Invalid client SCB
+    }
+
+    // Establish bidirectional pipes between client and server
+    FCB* pipe_fcb_1[2] = {client_scb->fcb, serverFcb};
+    pipe_cb* pipe_1 = init_pipe(pipe_fcb_1);
+
+    FCB* pipe_fcb_2[2] = {serverFcb, client_scb->fcb};
+    pipe_cb* pipe_2 = init_pipe(pipe_fcb_2);
+
+    if (pipe_1 && pipe_2) {
+        // Configure the server socket
+        server_scb->type = SOCKET_PEER;
+        server_scb->peer.read_pipe = pipe_2;
+        server_scb->peer.write_pipe = pipe_1;
+
+        // Configure the client socket
+        client_scb->type = SOCKET_PEER;
+        client_scb->peer.read_pipe = pipe_1;
+        client_scb->peer.write_pipe = pipe_2;
+    }
+
+    // Mark the request as admitted and signal the client
+    rc->admitted = 1;
+    kernel_signal(&rc->connected_cv);
+
+    return serverFid;  // Return the server socket file descriptor
+}
+
+
+int sys_Connect(Fid_t sock, port_t port, timeout_t timeout) {
+    // Validate input file descriptor and retrieve the associated FCB
+    FCB* fcb = get_fcb(sock);
+    if (fcb == NULL || fcb->streamfunc != &socket_file_ops) {
+        return NOFILE; // Invalid socket
+    }
+
+    // Validate the port number
+    if (port <= NOPORT || port > MAX_PORT) {
+        return -1; // Invalid port
+    }
+
+    // Retrieve the socket control block (SCB) for the client
+    SCB* client_scb = (SCB*)fcb->streamobj;
+    if (client_scb == NULL || client_scb->type != SOCKET_UNBOUND) {
+        return -1; // Invalid client socket
+    }
+
+    // Retrieve the listener SCB for the target port
+    SCB* listener_scb = PORT_MAP[port];
+    if (listener_scb == NULL || listener_scb->type != SOCKET_LISTENER) {
+        return -1; // No listener available on the specified port
+    }
+
+    // Initialize a connection request for the client
+    request_connection* conn_req = init_request_connection(client_scb);
+
+    // Add the connection request to the listener's queue
+    rlist_push_back(&listener_scb->listener.queue, &conn_req->queue_node);
+
+    // Notify the listener that a new request is available
+    kernel_signal(&listener_scb->listener.req_available);
+
+    // Increment reference count for the client SCB to prevent closure during wait
+    client_scb->refcount++;
+
+    // Wait for the connection to be admitted or timeout
+    while (conn_req->admitted == 0) {
+        if (kernel_timedwait(&conn_req->connected_cv, SCHED_IO, timeout * 1000) == 0) {
+            client_scb->refcount--;
+            free(conn_req);
+            return -1; // Timeout
+        }
+    }
+
+    // Decrement the reference count after the connection is established
+    if (client_scb->refcount > 0) {
+        client_scb->refcount--;
+    }
+
+    // Free the connection request object
+    free(conn_req);
+
+    return 0; // Success
+}
+
+
+
+int sys_ShutDown(Fid_t sock, shutdown_mode how) {
+    // Validate the shutdown mode
+    if (how < SHUTDOWN_READ || how > SHUTDOWN_BOTH) {
+        return -1; // Invalid mode
+    }
+
+    // Retrieve the FCB for the socket
+    FCB* fcb = get_fcb(sock);
+    if (fcb == NULL) {
+        return -1; // Invalid file descriptor
+    }
+
+    // Retrieve the socket control block (SCB)
+    SCB* scb = (SCB*)fcb->streamobj;
+    if (scb == NULL || scb->type != SOCKET_PEER) {
+        return -1; // Shutdown only valid for peer sockets
+    }
+
+    // Perform the appropriate shutdown operation
+    int result = 0;
+    switch (how) {
+        case SHUTDOWN_READ:
+            result = pipe_reader_close(scb->peer.read_pipe);
+            break;
+
+        case SHUTDOWN_WRITE:
+            result = pipe_writer_close(scb->peer.write_pipe);
+            break;
+
+        case SHUTDOWN_BOTH:
+            if (pipe_writer_close(scb->peer.write_pipe) != 0 ||
+                pipe_reader_close(scb->peer.read_pipe) != 0) {
+                result = -1; // Failure in closing one or both directions
+            }
+            break;
+
+        default:
+            result = -1; // Should never reach here
+            break;
+    }
+
+    return result; // Return the result of the shutdown operation
+}
+
+
+
+
+
+
+
